@@ -28,24 +28,51 @@ internal static class Program {
 		return 1;
 	}
 
-	public static void Unpack(string data, string output) { }
+	public static void Unpack(string dataPath, string outputPath) {
+		foreach (var pac in EnumeratePacs(dataPath)) {
+			var root = pac.RootPath;
+			if (root.Length > 0) {
+				root += "/";
+			}
+
+			if (pac.Language.Length > 0) {
+				root += $"{pac.Language}/";
+			}
+
+			foreach (var (file, info) in pac.FileEntries) {
+				var filePath = root + file;
+				filePath = filePath.TrimStart('.', '/');
+				var path = Path.GetFullPath(Path.Combine(outputPath, filePath));
+				Console.WriteLine(filePath);
+				using var data = pac.OpenRead(info);
+				var dir = Path.GetDirectoryName(path) ?? outputPath;
+				Directory.CreateDirectory(dir);
+				using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
+				stream.Write(data.Memory.Span[..(int) info.UncompressedSize]);
+			}
+		}
+	}
 
 	public static void List(string data) {
 		foreach (var pac in EnumeratePacs(data)) {
 			var root = pac.RootPath;
 			if (root.Length > 0) {
-				root = "/" + root;
+				root += "/";
+			}
+
+			if (pac.Language.Length > 0) {
+				root += $"{pac.Language}/";
 			}
 
 			foreach (var (file, info) in pac.FileEntries) {
-				Console.WriteLine($"{root}/{file}, {info.FileNameHash:x8}, {info.Checksum:x8}, {info.IsCompressed}, {info.CompressionType:G}, {info.Flags:b16}, {info.TileStreamStride:x32}, {info.CompressedSize}, {info.UncompressedSize}, {info.OffsetInBuffer}, {info.Reserved}");
+				Console.WriteLine($"{root}{file}, {info.FileNameHash:x8}, {info.Checksum:x8}, {info.IsCompressed}, {info.CompressionType:G}, {info.Flags:b16}, {info.TileStreamInfoSize:x32}, {info.CompressedSize}, {info.UncompressedSize}, {info.OffsetInBuffer}, {info.Reserved}");
 			}
 		}
 	}
 
-	public static IEnumerable<FaithPac> EnumeratePacs(string data) {
-		foreach (var file in Directory.EnumerateFiles(Path.GetFullPath(data), "*.pac", SearchOption.TopDirectoryOnly)) {
-			using var pac = new FaithPac(new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite));
+	public static IEnumerable<FaithPac> EnumeratePacs(string dataPath) {
+		foreach (var file in Directory.EnumerateFiles(Path.GetFullPath(dataPath), "*.pac", SearchOption.TopDirectoryOnly)) {
+			using var pac = new FaithPac(new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite), Path.GetFileNameWithoutExtension(file));
 			yield return pac;
 		}
 	}

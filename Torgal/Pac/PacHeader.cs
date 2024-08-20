@@ -13,7 +13,7 @@ public record struct PacHeader {
 	public ushort TileStreamCount { get; set; }
 	public long Size { get; set; }
 	public StaticArray100 RootPath { get; set; }
-	public long TileStreamArrayOffset { get; set; }
+	public long GlobalTileStreamOffset { get; set; }
 	public long FileNameTableOffset { get; set; }
 	public long FileNameTableCount { get; set; }
 }

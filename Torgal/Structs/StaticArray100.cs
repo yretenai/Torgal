@@ -30,9 +30,7 @@ public struct StaticArray100 : IEquatable<StaticArray100> {
 		return false;
 	}
 
-	public bool Equals(StaticArray100 obj) {
-		return ((Span<byte>) this).SequenceEqual(obj);
-	}
+	public bool Equals(StaticArray100 obj) => ((Span<byte>) this).SequenceEqual(obj);
 
 	public bool Equals(ReadOnlySpan<byte> span) {
 		var self = (Span<byte>) this;
@@ -50,11 +48,7 @@ public struct StaticArray100 : IEquatable<StaticArray100> {
 		return hashCode.ToHashCode();
 	}
 
-	public static bool operator ==(StaticArray100 left, StaticArray100 right) {
-		return left.Equals(right);
-	}
+	public static bool operator ==(StaticArray100 left, StaticArray100 right) => left.Equals(right);
 
-	public static bool operator !=(StaticArray100 left, StaticArray100 right) {
-		return !(left == right);
-	}
+	public static bool operator !=(StaticArray100 left, StaticArray100 right) => !(left == right);
 }

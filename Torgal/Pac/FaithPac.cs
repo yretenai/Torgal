@@ -1,12 +1,14 @@
 using System.Buffers;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
+using GDeflateNet;
 
 namespace Torgal.Pac;
 
 public sealed class FaithPac : IDisposable, IAsyncDisposable {
-	public FaithPac(Stream stream) {
+	public FaithPac(Stream stream, string filename) {
 		BaseStream = stream;
 
 		PacHeader header = default;
@@ -14,6 +16,11 @@ public sealed class FaithPac : IDisposable, IAsyncDisposable {
 
 		if (!header.Magic.Equals("PACK"u8)) {
 			throw new FileLoadException("Not a PAC file!", (stream as FileStream)?.Name);
+		}
+
+		var period = filename.IndexOf('.', StringComparison.Ordinal);
+		if (period > -1) {
+			Language = filename[(period + 1)..];
 		}
 
 		var rootPath = header.RootPath;
@@ -60,9 +67,9 @@ public sealed class FaithPac : IDisposable, IAsyncDisposable {
 		}
 
 		var tileStreamCount = (int) header.TileStreamCount;
-		TileStreams = MemoryPool<PacTileStreamHeader>.Shared.Rent(tileStreamCount);
-		if (header.TileStreamArrayOffset > 0) {
-			BaseStream.Position = header.TileStreamArrayOffset;
+		TileStreams = MemoryPool<PacSharedTileStreamHeader>.Shared.Rent(tileStreamCount);
+		if (header.GlobalTileStreamOffset > 0) {
+			BaseStream.Position = header.GlobalTileStreamOffset;
 			stream.ReadExactly(MemoryMarshal.AsBytes(TileStreams.Memory.Span[..tileStreamCount]));
 		}
 
@@ -84,18 +91,30 @@ public sealed class FaithPac : IDisposable, IAsyncDisposable {
 
 			var str = Encoding.UTF8.GetString(slice[..nullByte]);
 			FileNameIndex[str] = index;
+
+			Debug.Assert(file.UncompressedSize < int.MaxValue);
 		}
 	}
 
 	public PacHeader Header { get; }
 	public string RootPath => Header.RootPath.AsString();
-	private IMemoryOwner<PacTileStreamHeader> TileStreams { get; }
+	public string Language { get; } = string.Empty;
+	private IMemoryOwner<PacSharedTileStreamHeader> TileStreams { get; }
 	private IMemoryOwner<PacFileEntry> FileBuffer { get; }
 	private IMemoryOwner<byte> FileNameBuffer { get; }
 	private Dictionary<string, int> FileNameIndex { get; } = [];
 	public IEnumerable<string> Paths => FileNameIndex.Keys;
-	public IEnumerable<(string Path, PacFileEntry Entry)> FileEntries => FileNameIndex.Select(x => (x.Key, FileBuffer.Memory.Span[x.Value]));
+	public IEnumerable<(string Path, PacFileEntry Entry)> FileEntries => FileNameIndex.Select(x => (x.Key, FileBuffer.Memory.Span[x.Value])).OrderBy(x => x.Item2.TileStreamOffset);
 	public Stream BaseStream { get; }
+	private IMemoryOwner<byte>? LastSharedStream { get; set; }
+	private int LastSharedStreamIndex { get; set; }
+
+	public async ValueTask DisposeAsync() {
+		await BaseStream.DisposeAsync();
+		TileStreams.Dispose();
+		FileBuffer.Dispose();
+		FileNameBuffer.Dispose();
+	}
 
 	public void Dispose() {
 		BaseStream.Dispose();
@@ -104,10 +123,71 @@ public sealed class FaithPac : IDisposable, IAsyncDisposable {
 		FileNameBuffer.Dispose();
 	}
 
-	public async ValueTask DisposeAsync() {
-		await BaseStream.DisposeAsync();
-		TileStreams.Dispose();
-		FileBuffer.Dispose();
-		FileNameBuffer.Dispose();
+	public IMemoryOwner<byte> OpenRead(PacFileEntry file) {
+		Debug.Assert(file.UncompressedSize < int.MaxValue);
+		var buffer = MemoryPool<byte>.Shared.Rent((int) file.UncompressedSize);
+
+		switch (file.CompressionType) {
+			case PackFileCompressionType.None: {
+				BaseStream.Position = file.OffsetInBuffer;
+				BaseStream.ReadExactly(buffer.Memory.Span[..(int) file.UncompressedSize]);
+				break;
+			}
+			case PackFileCompressionType.TileStream: {
+				OpenTileStream(file.OffsetInBuffer, file.CompressedSize, buffer.Memory);
+				break;
+			}
+			case PackFileCompressionType.LargeTileStream: {
+				Span<byte> info = stackalloc byte[(int) file.TileStreamInfoSize];
+				BaseStream.Position = file.TileStreamOffset;
+				BaseStream.ReadExactly(info);
+				var header = MemoryMarshal.Read<PacTileStreamHeader>(info);
+
+				const int BlockSize = 0x80000;
+				var decompressedOffset = 0;
+				var lastBlockSize = header.Size - header.Size / BlockSize * BlockSize;
+				for (var i = 0; i < header.Count; ++i) {
+					var offset = MemoryMarshal.Read<int>(info[(Unsafe.SizeOf<PacTileStreamHeader>() + (i << 2))..]);
+					var size = lastBlockSize;
+					if (i < header.Count - 1) {
+						var next = MemoryMarshal.Read<int>(info[(Unsafe.SizeOf<PacTileStreamHeader>() + ((i + 1) << 2))..]);
+						size = next - offset;
+					}
+
+					OpenTileStream(file.OffsetInBuffer + offset, size, buffer.Memory[decompressedOffset..]);
+					decompressedOffset += BlockSize;
+				}
+
+				break;
+			}
+			case PackFileCompressionType.SharedTileStream: {
+				var index = (int) ((file.TileStreamOffset - Header.GlobalTileStreamOffset) / Unsafe.SizeOf<PacSharedTileStreamHeader>());
+				if (LastSharedStreamIndex != index || LastSharedStream == null) {
+					LastSharedStream?.Dispose();
+					LastSharedStreamIndex = index;
+
+					var tileStreamInfo = TileStreams.Memory.Span[index];
+					Debug.Assert(tileStreamInfo.UncompressedSize < int.MaxValue);
+
+					LastSharedStream = MemoryPool<byte>.Shared.Rent((int) tileStreamInfo.UncompressedSize);
+					OpenTileStream(tileStreamInfo.TileStreamOffset, tileStreamInfo.CompressedSize, LastSharedStream.Memory);
+				}
+
+				LastSharedStream.Memory.Span.Slice((int) file.OffsetInBuffer, (int) file.UncompressedSize).CopyTo(buffer.Memory.Span);
+				break;
+			}
+			default: throw new ArgumentOutOfRangeException();
+		}
+
+		return buffer;
+	}
+
+	private void OpenTileStream(long offset, int size, Memory<byte> data) {
+		BaseStream.Position = offset;
+		using var buffer = MemoryPool<byte>.Shared.Rent(size);
+		BaseStream.ReadExactly(buffer.Memory.Span[..size]);
+		if (!GDeflate.Decompress(buffer.Memory[..size], data, 1)) {
+			throw new InvalidOperationException("Failed to decompress!");
+		}
 	}
 }

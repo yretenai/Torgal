@@ -13,7 +13,7 @@ public record struct PacFileEntry {
 	public long TileStreamOffset { get; set; }
 	public long FileNameOffset { get; set; }
 	public uint FileNameHash { get; set; } // FNV1(FileName)
-	public uint Checksum { get; set; } // FNV1(Data)
+	public uint Checksum { get; set; } // CRC32(Data)
 	public uint Reserved { get; set; } // Engine reserved, should always be zero.
-	public uint TileStreamStride { get; set; } // 0x18 for type 3, ?? for type 2, 0 for all other types.
+	public uint TileStreamInfoSize { get; set; } // 0x18 for type 3, ?? for type 2, 0 for all other types.
 }
