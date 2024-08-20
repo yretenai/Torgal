@@ -1,0 +1,4 @@
+[submodule "GDeflate"]
+	path = GDeflate
+	ignore = dirty
+	url = git@github.com:yretenai/GDeflateNet.git
