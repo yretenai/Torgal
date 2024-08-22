@@ -61,8 +61,6 @@ internal static class Program {
 					using var nestedPac = new FaithPac(pacStream, Path.GetFileNameWithoutExtension(file));
 					UnpackPac(nestedPac, outputPath);
 				}
-
-				continue;
 			}
 
 			var path = Path.GetFullPath(Path.Combine(outputPath, filePath));
