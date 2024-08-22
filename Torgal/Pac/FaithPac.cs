@@ -125,25 +125,16 @@ public sealed class FaithPac : IDisposable, IAsyncDisposable {
 
 	public IMemoryOwner<byte> OpenRead(PacFileEntry file) {
 		Debug.Assert(file.UncompressedSize < int.MaxValue);
-		const int FaithBlockSize = 0x80000;
-		const int TileStreamBlockSize = 0x10000;
-
-		// align buffer size to TileStreamBlockSize just in case.
-		// the TileStream decompressor assumes the buffer to be a multiple of TileStreamBlockSize.
-		// which it is unless it's the last tile.
-		var bufferSize = (int) file.UncompressedSize;
-		var alignedSize = (bufferSize + (TileStreamBlockSize - 1)) & ~(TileStreamBlockSize - 1);
-		var buffer = MemoryPool<byte>.Shared.Rent(alignedSize);
-		var realBuffer = buffer.Memory[..bufferSize];
+		var buffer = MemoryPool<byte>.Shared.Rent((int) file.UncompressedSize);
 
 		switch (file.CompressionType) {
 			case PackFileCompressionType.None: {
 				BaseStream.Position = file.OffsetInBuffer;
-				BaseStream.ReadExactly(realBuffer.Span);
+				BaseStream.ReadExactly(buffer.Memory.Span[..(int) file.UncompressedSize]);
 				break;
 			}
 			case PackFileCompressionType.TileStream: {
-				OpenTileStream(file.OffsetInBuffer, file.CompressedSize, realBuffer);
+				OpenTileStream(file.OffsetInBuffer, file.CompressedSize, buffer.Memory);
 				break;
 			}
 			case PackFileCompressionType.LargeTileStream: {
@@ -152,8 +143,9 @@ public sealed class FaithPac : IDisposable, IAsyncDisposable {
 				BaseStream.ReadExactly(info);
 				var header = MemoryMarshal.Read<PacTileStreamHeader>(info);
 
+				const int BlockSize = 0x80000;
 				var decompressedOffset = 0;
-				var lastBlockSize = header.Size - header.Size / FaithBlockSize * FaithBlockSize;
+				var lastBlockSize = header.Size - header.Size / BlockSize * BlockSize;
 				for (var i = 0; i < header.Count; ++i) {
 					var offset = MemoryMarshal.Read<int>(info[(Unsafe.SizeOf<PacTileStreamHeader>() + (i << 2))..]);
 					var size = lastBlockSize;
@@ -162,8 +154,8 @@ public sealed class FaithPac : IDisposable, IAsyncDisposable {
 						size = next - offset;
 					}
 
-					OpenTileStream(file.OffsetInBuffer + offset, size, realBuffer[decompressedOffset..]);
-					decompressedOffset += FaithBlockSize;
+					OpenTileStream(file.OffsetInBuffer + offset, size, buffer.Memory[decompressedOffset..]);
+					decompressedOffset += BlockSize;
 				}
 
 				break;
@@ -181,7 +173,7 @@ public sealed class FaithPac : IDisposable, IAsyncDisposable {
 					OpenTileStream(tileStreamInfo.TileStreamOffset, tileStreamInfo.CompressedSize, LastSharedStream.Memory);
 				}
 
-				LastSharedStream.Memory.Span.Slice((int) file.OffsetInBuffer, (int) file.UncompressedSize).CopyTo(realBuffer.Span);
+				LastSharedStream.Memory.Span.Slice((int) file.OffsetInBuffer, (int) file.UncompressedSize).CopyTo(buffer.Memory.Span);
 				break;
 			}
 			default: throw new ArgumentOutOfRangeException();
