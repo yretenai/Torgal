@@ -28,6 +28,10 @@ public sealed class FaithPac : IDisposable, IAsyncDisposable {
 		FastSIMD.Expand(rootPath[^8..], key);
 		FastSIMD.Xor(rootPath, key);
 
+		if (rootPath[^9] != 0) {
+			throw new InvalidOperationException("Too long for simple processing");
+		}
+
 		Header = header with {
 			RootPath = rootPath,
 		};
