@@ -51,7 +51,6 @@ internal static class Program {
 
 			using var data = pac.OpenRead(info);
 			if (data.Memory.Length < info.UncompressedSize) {
-				Console.Error.WriteLine($"Failed extracting {filePath}");
 				continue;
 			}
 
@@ -60,7 +59,6 @@ internal static class Program {
 					using var pin = data.Memory.Pin();
 					using var pacStream = new UnmanagedMemoryStream((byte*) pin.Pointer, info.UncompressedSize);
 					using var nestedPac = new FaithPac(pacStream, Path.GetFileNameWithoutExtension(file));
-					Console.WriteLine($"Processing nested pac {filePath}");
 					UnpackPac(nestedPac, outputPath);
 				}
 
