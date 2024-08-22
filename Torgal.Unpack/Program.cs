@@ -30,26 +30,48 @@ internal static class Program {
 
 	public static void Unpack(string dataPath, string outputPath) {
 		foreach (var pac in EnumeratePacs(dataPath)) {
-			var root = pac.RootPath;
-			if (root.Length > 0) {
-				root += "/";
+			UnpackPac(pac, outputPath);
+		}
+	}
+
+	private static void UnpackPac(FaithPac pac, string outputPath) {
+		var root = pac.RootPath;
+		if (root.Length > 0) {
+			root += "/";
+		}
+
+		if (pac.Language.Length > 0) {
+			root += $"{pac.Language}/";
+		}
+
+		foreach (var (file, info) in pac.FileEntries) {
+			var filePath = root + file;
+			filePath = filePath.TrimStart('.', '/');
+			Console.WriteLine(filePath);
+
+			using var data = pac.OpenRead(info);
+			if (data.Memory.Length < info.UncompressedSize) {
+				Console.Error.WriteLine($"Failed extracting {filePath}");
+				continue;
 			}
 
-			if (pac.Language.Length > 0) {
-				root += $"{pac.Language}/";
+			if (file.EndsWith(".pac", StringComparison.OrdinalIgnoreCase) && data.Memory.Span[..4].SequenceEqual("PACK"u8)) {
+				unsafe {
+					using var pin = data.Memory.Pin();
+					using var pacStream = new UnmanagedMemoryStream((byte*) pin.Pointer, info.UncompressedSize);
+					using var nestedPac = new FaithPac(pacStream, Path.GetFileNameWithoutExtension(file));
+					Console.WriteLine($"Processing nested pac {filePath}");
+					UnpackPac(nestedPac, outputPath);
+				}
+
+				continue;
 			}
 
-			foreach (var (file, info) in pac.FileEntries) {
-				var filePath = root + file;
-				filePath = filePath.TrimStart('.', '/');
-				var path = Path.GetFullPath(Path.Combine(outputPath, filePath));
-				Console.WriteLine(filePath);
-				using var data = pac.OpenRead(info);
-				var dir = Path.GetDirectoryName(path) ?? outputPath;
-				Directory.CreateDirectory(dir);
-				using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
-				stream.Write(data.Memory.Span[..(int) info.UncompressedSize]);
-			}
+			var path = Path.GetFullPath(Path.Combine(outputPath, filePath));
+			var dir = Path.GetDirectoryName(path) ?? outputPath;
+			Directory.CreateDirectory(dir);
+			using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
+			stream.Write(data.Memory.Span[..(int) info.UncompressedSize]);
 		}
 	}
 
